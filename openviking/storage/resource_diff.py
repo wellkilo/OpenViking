@@ -553,18 +553,24 @@ async def build_rnfv_snapshot(
     if root_is_file or request.processing_mode == "vectors_only":
         projection = projection | {"abstract"}
 
-    async with asyncio.TaskGroup() as group:
-        artifact_task = group.create_task(read_artifact())
-        formal_task = group.create_task(read_formal())
-        vector_task = group.create_task(
+    tasks = (
+        asyncio.create_task(read_artifact()),
+        asyncio.create_task(read_formal()),
+        asyncio.create_task(
             _read_incremental_vector_inventory(
                 vikingdb, target_uri=target_uri, ctx=ctx, projection=projection
             )
-        )
-
-    artifact = artifact_task.result()
-    target_files, files_complete = formal_task.result()
-    inventory = vector_task.result()
+        ),
+    )
+    try:
+        artifact, formal, inventory = await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    target_files, files_complete = formal
     base = target_uri.rstrip("/")
     prefix = base + "/"
     vector_records: Dict[str, VectorRecordSnapshot] = {}

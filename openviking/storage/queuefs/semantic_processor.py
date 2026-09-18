@@ -49,7 +49,7 @@ from openviking.storage.acl import CreatorAclGrant
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
-from openviking.storage.queuefs.semantic_executor import SemanticTreeStats, SemanticTreeExecutor
+from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -547,7 +547,9 @@ class SemanticProcessor(DequeueHandlerBase):
                             from collections import Counter
 
                             entries = msg.plan.tree.entries
-                            action_counts = Counter(entry.semantic_action.value for entry in entries)
+                            action_counts = Counter(
+                                entry.semantic_action.value for entry in entries
+                            )
                             vector_slots = sum(
                                 slot.action.value in {"upsert", "merge"}
                                 for entry in entries
@@ -798,6 +800,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 await viking_fs._async_agfs.pathlock_release(lock)
             except Exception as exc:
                 logger.warning("Failed to release cancelled semantic lock: %s", exc)
+
     async def _resolve_skill_semantic_lock(
         self,
         msg: SemanticMsg,
@@ -1865,7 +1868,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     for key in ("name", "description", "tags", "allowed_tools")
                 }
                 skill_meta["source_path"] = skill_source_path
-        await vectorize_directory_meta(
+        return await vectorize_directory_meta(
             uri=uri,
             abstract=abstract,
             overview=overview,
@@ -1895,50 +1898,6 @@ class SemanticProcessor(DequeueHandlerBase):
             return {}
         active_ctx = ctx or self._default_ctx
         return await vector_store.get_l2_abstracts_by_uris(file_paths, ctx=active_ctx)
-
-    async def _update_file_vector_fields(
-        self,
-        *,
-        record_id: str,
-        file_path: str,
-        file_md5: Optional[str],
-        file_content: Optional[bytes],
-        ctx: RequestContext,
-        scalar_fields: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
-        from openviking.storage.viking_vector_index_backend import VIKINGDB_CONTENT_MAX_SIZE
-        from openviking.telemetry import get_current_telemetry
-        from openviking.utils.embedding_utils import (
-            _coerce_text_file_content,
-            _enqueue_embedding_message,
-        )
-        from openviking.utils.time_utils import get_current_timestamp
-
-        fields: Dict[str, Any] = {"updated_at": get_current_timestamp()}
-        if file_md5:
-            fields["md5"] = file_md5
-        if file_content is not None:
-            fields["content"] = _coerce_text_file_content(file_content)[:VIKINGDB_CONTENT_MAX_SIZE]
-        fields.update(dict(scalar_fields or {}))
-        embedding_msg = EmbeddingMsg.for_update_fields(
-            record_id=record_id,
-            fields=fields,
-            context_data={
-                "uri": file_path,
-                "account_id": ctx.account_id,
-                "owner_user_id": ctx.user.user_id,
-            },
-            telemetry_id=get_current_telemetry().telemetry_id,
-        )
-        queue_manager = get_queue_manager()
-        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
-        return await _enqueue_embedding_message(
-            embedding_queue,
-            embedding_msg,
-            failure_message=f"Failed to enqueue file scalar update for {file_path}",
-        )
 
     async def _update_vector_fields(
         self,

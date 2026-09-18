@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,7 +20,6 @@ async def test_cancelled_post_process_cleans_agfs_plan_artifact():
     )
     processor = AddResourceProcessor(
         SimpleNamespace(),
-        asyncio.get_running_loop(),
         "add_resource",
         viking_fs,
     )

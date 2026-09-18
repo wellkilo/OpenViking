@@ -81,6 +81,23 @@ class _FakeTreeExecutor:
 
 
 @pytest.mark.asyncio
+async def test_vectorize_directory_returns_enqueued_levels(monkeypatch):
+    vectorize = AsyncMock(return_value={0, 1})
+    monkeypatch.setattr("openviking.utils.embedding_utils.vectorize_directory_meta", vectorize)
+    processor = object.__new__(SemanticProcessor)
+    processor._default_ctx = object()
+
+    result = await processor._vectorize_directory(
+        "viking://resources/root",
+        "resource",
+        "abstract",
+        "overview",
+    )
+
+    assert result == {0, 1}
+
+
+@pytest.mark.asyncio
 async def test_target_source_syncs_before_semantic_executor(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",

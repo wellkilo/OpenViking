@@ -237,7 +237,6 @@ class SemanticTreeExecutor:
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
         self._added_paths = {path.rstrip("/") for path in self._changes.get("added", [])}
-        self._modified_paths = {path.rstrip("/") for path in self._changes.get("modified", [])}
         self._tree_changed_paths = {
             path.rstrip("/") for key in ("added", "deleted") for path in self._changes.get(key, [])
         }
@@ -332,11 +331,6 @@ class SemanticTreeExecutor:
             uri
             for uri, entry in self._plan_entries_by_uri.items()
             if entry.content_state.value in {"added", "restore", "replace_kind"}
-        }
-        self._modified_paths = {
-            uri
-            for uri, entry in self._plan_entries_by_uri.items()
-            if entry.content_state.value == "modified"
         }
         self._tree_changed_paths = {
             root if not entry.relative_path else f"{root}/{entry.relative_path}"
@@ -1156,9 +1150,7 @@ class SemanticTreeExecutor:
                     file_md5 = manifest_md5
                 if self._semantic_plan is not None:
                     vectorize_kwargs["scalar_override"] = self._plan_scalar_override(file_path, 2)
-                    vectorize_kwargs["action"] = (
-                        slot.action.value if slot is not None else "upsert"
-                    )
+                    vectorize_kwargs["action"] = slot.action.value if slot is not None else "upsert"
                 enqueued = await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,
@@ -1507,8 +1499,7 @@ class SemanticTreeExecutor:
                             "actions": {
                                 level: slot.action
                                 for level, slot in slots.items()
-                                if slot.action
-                                in {IndexAction.UPSERT, IndexAction.MERGE}
+                                if slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
                             },
                             "include_abstract": include_abstract,
                             "include_overview": include_overview,
@@ -1560,9 +1551,7 @@ class SemanticTreeExecutor:
 
             if self._semantic_plan is not None:
                 self._scheduled_vector_record_ids.update(
-                    slot.record_id
-                    for slot in slots.values()
-                    if slot.level in enqueued_levels
+                    slot.record_id for slot in slots.values() if slot.level in enqueued_levels
                 )
         finally:
             self._stats.done_nodes += 1

@@ -82,9 +82,7 @@ class _FakeVikingDB:
             if uri == target_uri or uri.startswith(prefix)
         }
 
-    async def get_incremental_inventory_under_uri(
-        self, target_uri, *, ctx, output_fields=None
-    ):
+    async def get_incremental_inventory_under_uri(self, target_uri, *, ctx, output_fields=None):
         del ctx
         self.inventory_output_fields = list(output_fields or [])
         prefix = target_uri.rstrip("/") + "/"
@@ -189,7 +187,10 @@ async def test_prepare_artifact_inventory_rewrites_images_during_single_artifact
     )
     assert inventory.artifact_paths["docs/guide.md"] == "repository/docs/guide.md"
     assert inventory.rewritten_paths == frozenset({"docs/guide.md"})
-    assert [call.args[1] for call in store.list.await_args_list] == ["repository", "repository/docs"]
+    assert [call.args[1] for call in store.list.await_args_list] == [
+        "repository",
+        "repository/docs",
+    ]
 
 
 @pytest.mark.asyncio
@@ -252,7 +253,9 @@ async def test_build_rnfv_snapshot_reuses_prepared_artifact_inventory(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_build_rnfv_snapshot_starts_new_formal_and_vector_reads_concurrently(tmp_path, monkeypatch):
+async def test_build_rnfv_snapshot_starts_new_formal_and_vector_reads_concurrently(
+    tmp_path, monkeypatch
+):
     from openviking.parse.output import LocalParseOutputStore
     from openviking.storage.resource_diff import ArtifactInventory
 
@@ -304,3 +307,57 @@ async def test_build_rnfv_snapshot_starts_new_formal_and_vector_reads_concurrent
     assert snapshot.new.entries["a.py"].md5 == "new"
     assert snapshot.formal.entries["a.py"].is_dir is False
     assert snapshot.vectors.records_by_id["record"].fields["md5"] == "old"
+
+
+@pytest.mark.asyncio
+async def test_build_rnfv_snapshot_cancels_sibling_reads_after_failure(tmp_path, monkeypatch):
+    from openviking.parse.output import LocalParseOutputStore
+
+    root = "viking://resources/x"
+    store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+    ref = await store.create_artifact(root_type="dir")
+    started = set()
+    cancelled = set()
+    fail = asyncio.Event()
+
+    async def read_new(*args, **kwargs):
+        started.add("new")
+        await fail.wait()
+        raise RuntimeError("inventory failed")
+
+    async def wait_for_cancel(name):
+        started.add(name)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.add(name)
+
+    monkeypatch.setattr("openviking.storage.resource_diff.prepare_artifact_inventory", read_new)
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff.read_target_file_snapshot",
+        lambda *args, **kwargs: wait_for_cancel("formal"),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff._read_incremental_vector_inventory",
+        lambda *args, **kwargs: wait_for_cancel("vectors"),
+    )
+
+    task = asyncio.create_task(
+        build_rnfv_snapshot(
+            viking_fs=_FakeVikingFS([]),
+            vikingdb=_FakeVikingDB({}),
+            store=store,
+            artifact_ref=ref,
+            target_uri=root,
+            ctx=_Ctx(),
+        )
+    )
+    for _ in range(10):
+        if started == {"new", "formal", "vectors"}:
+            break
+        await asyncio.sleep(0)
+    fail.set()
+
+    with pytest.raises(RuntimeError, match="inventory failed"):
+        await task
+    assert cancelled == {"formal", "vectors"}

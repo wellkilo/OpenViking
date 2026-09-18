@@ -1213,7 +1213,7 @@ async def test_skill_directory_body_frontmatter_is_not_parsed_twice(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_full_upsert_append_merges_existing_search_tags_before_enqueue(monkeypatch):
+async def test_full_upsert_uses_resolved_search_tags_from_plan(monkeypatch):
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("body"))
@@ -1230,18 +1230,19 @@ async def test_full_upsert_append_merges_existing_search_tags_before_enqueue(mon
         summary_dict={"name": "a.py", "summary": "summary"},
         parent_uri="viking://resources/repo",
         ctx=DummyReq(),
-        scalar_override={"search_tags": ["team=old", "lang=python"]},
+        scalar_override={"search_tags": ["team=old", "lang=python", "team=new", "owner=alice"]},
         ingest_options=IngestOptions.from_search_tags(["team=new", "owner=alice"], mode="append"),
-        action="merge",
+        action="upsert",
     )
 
     msg = queue.items[0]
     assert msg.context_data["search_tags"] == [
-        "team=new",
+        "team=old",
         "lang=python",
+        "team=new",
         "owner=alice",
     ]
-    assert msg.action.value == "merge"
+    assert msg.action.value == "upsert"
     assert msg.context_data["_upsert_options"] == {"search_tag_mode": "append"}
 
 

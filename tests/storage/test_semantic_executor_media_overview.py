@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_executor import (
+    DirNode,
     SemanticTreeExecutor,
-    SemanticTreeNode,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -31,7 +31,7 @@ def _node(
     uri = "viking://resources/media"
     files = [(filename, summary)]
     file_paths = [f"{uri}/{name}" for name, _ in files]
-    return SemanticTreeNode(
+    return DirNode(
         uri=uri,
         children_dirs=[],
         file_paths=file_paths,

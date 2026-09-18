@@ -9,9 +9,14 @@ artifact is uploaded file-by-file to the final resource location, matching sourc
 bytes, without going through persist_temp_tree or any AGFS temp write.
 """
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from openviking.parse.output import LocalParseOutputStore
+from openviking.storage.context_update_plan import ContentTreeAction, ContextUpdatePlan
+from openviking.utils.content_hash import content_md5
 from openviking.utils.resource_processor import ResourceProcessor
 
 
@@ -45,12 +50,12 @@ class _RecordingAgfs:
     async def read_file_bytes(self, uri, *, ctx=None):
         return self.files[uri]
 
-    async def rm(self, uri, *, recursive=False, ctx=None, lease_ref=None):
+    async def remove_files(self, uri, *, recursive=False, ctx=None, lease_ref=None):
         self.files.pop(uri, None)
 
 
 @pytest.mark.asyncio
-async def test_persist_local_artifact_uploads_to_resource_tree(tmp_path, monkeypatch):
+async def test_commit_local_artifact_uploads_to_resource_tree(tmp_path, monkeypatch):
     import json
 
     from openviking.parse.parsers.upload_utils import ARTIFACT_MANIFEST_NAME
@@ -82,13 +87,53 @@ async def test_persist_local_artifact_uploads_to_resource_tree(tmp_path, monkeyp
     doc_rel = rp._artifact_doc_rel(ref, f"{ref.root}/repository")
     assert doc_rel == "repository"
 
-    apply_result = await rp._persist_local_artifact(
+    plan = ContextUpdatePlan(
+        root_uri="viking://resources/acme/demo",
+        context_type="resource",
+        content_tree_actions=(
+            ContentTreeAction(
+                "upsert",
+                "a.py",
+                new_kind="file",
+                artifact_path="a.py",
+                md5=content_md5(b"print('a')"),
+            ),
+            ContentTreeAction(
+                "upsert",
+                "src/b.py",
+                new_kind="file",
+                artifact_path="src/b.py",
+                md5=content_md5(b"print('b')"),
+            ),
+        ),
+    )
+    snapshot = SimpleNamespace(
+        new=SimpleNamespace(entries={}),
+        formal=SimpleNamespace(entries={}),
+        vectors=SimpleNamespace(records_by_id={}),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff.build_rnfv_snapshot", AsyncMock(return_value=snapshot)
+    )
+    monkeypatch.setattr(
+        "openviking.storage.context_update_plan.build_context_update_plan_from_snapshot",
+        AsyncMock(return_value=(SimpleNamespace(entries={}), plan)),
+    )
+
+    committed = await rp._commit_directory_artifact_with_plan(
         output_store=store,
         artifact_ref=ref,
         doc_rel=doc_rel,
         root_uri="viking://resources/acme/demo",
-        ctx=object(),
+        target_preexisting=False,
+        ctx=SimpleNamespace(account_id="test-account"),
         lease_ref=None,
+        vectorize=True,
+        summarize=False,
+        processing_mode="semantic_and_vectors",
+        is_code_repo=True,
+        ingest_options=None,
+        source_metadata=None,
     )
 
     # Files landed under the resource root with the repository prefix stripped,
@@ -97,33 +142,64 @@ async def test_persist_local_artifact_uploads_to_resource_tree(tmp_path, monkeyp
     assert agfs.files["viking://resources/acme/demo/src/b.py"] == b"print('b')"
     assert agfs.persist_temp_tree_calls == 0
     assert agfs.created_temp_uris == 0
-    assert apply_result.uploaded == ["a.py", "src/b.py"]
-    assert apply_result.files == ["a.py", "src/b.py"]
-    assert set(apply_result.md5_by_rel) == {"a.py", "src/b.py"}
+    assert committed.content_tree_actions == ()
 
 
 @pytest.mark.asyncio
-async def test_persist_local_flat_file_uploads_exact_target(tmp_path, monkeypatch):
+async def test_commit_local_flat_file_uploads_exact_target(tmp_path, monkeypatch):
     store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
     ref = await store.create_artifact(root_type="dir")
     await store.write_bytes(ref, "document/report.md", b"report")
     agfs = _RecordingAgfs()
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: agfs)
 
+    plan = ContextUpdatePlan(
+        root_uri="viking://resources/report.md",
+        context_type="resource",
+        content_tree_actions=(
+            ContentTreeAction(
+                "upsert",
+                "",
+                new_kind="file",
+                artifact_path="",
+                md5=content_md5(b"report"),
+            ),
+        ),
+    )
+    snapshot = SimpleNamespace(
+        new=SimpleNamespace(entries={}),
+        formal=SimpleNamespace(entries={}),
+        vectors=SimpleNamespace(records_by_id={}),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff.build_rnfv_snapshot", AsyncMock(return_value=snapshot)
+    )
+    monkeypatch.setattr(
+        "openviking.storage.context_update_plan.build_context_update_plan_from_snapshot",
+        AsyncMock(return_value=(SimpleNamespace(entries={}), plan)),
+    )
+
     result = await ResourceProcessor(
         vikingdb=_DummyVikingDB(), media_storage=None
-    )._persist_local_artifact(
+    )._commit_directory_artifact_with_plan(
         output_store=store,
         artifact_ref=ref,
         doc_rel="document/report.md",
         root_uri="viking://resources/report.md",
+        target_preexisting=False,
         root_is_file=True,
-        ctx=object(),
+        ctx=SimpleNamespace(account_id="test-account"),
         lease_ref=None,
+        vectorize=True,
+        summarize=False,
+        processing_mode="semantic_and_vectors",
+        is_code_repo=False,
+        ingest_options=None,
+        source_metadata=None,
     )
 
     assert agfs.files == {"viking://resources/report.md": b"report"}
-    assert result.files == [""]
+    assert result.content_tree_actions == ()
 
 
 def test_build_parse_output_store_defaults_to_none(monkeypatch):

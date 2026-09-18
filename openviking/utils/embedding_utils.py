@@ -9,7 +9,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
 from charset_normalizer import from_bytes
 
@@ -28,9 +28,9 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.acl import CreatorAclGrant
+from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.storage.index_action import IndexAction
 from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -72,11 +72,7 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
         # Internal queue metadata, removed by TextEmbeddingHandler before upsert.
         embedding_msg.context_data["_upsert_record_id"] = str(record_id)
     for field, value in overrides.items():
-        if (
-            field.startswith("_")
-            or field in NON_PORTABLE_VECTOR_RECORD_FIELDS
-            or value is None
-        ):
+        if field.startswith("_") or field in NON_PORTABLE_VECTOR_RECORD_FIELDS or value is None:
             continue
         embedding_msg.context_data[field] = value
 
@@ -89,13 +85,9 @@ def _apply_ingest_options(
     if not embedding_msg or ingest_options.search_tags is None:
         return
     incoming_tags = list(ingest_options.search_tags or [])
-    if (
-        ingest_options.search_tag_mode == "append"
-        and (
-            embedding_msg.action is IndexAction.MERGE
-            or embedding_msg.context_data.get("_upsert_options", {}).get("partial_update")
-            is False
-        )
+    if ingest_options.search_tag_mode == "append" and (
+        embedding_msg.action is IndexAction.MERGE
+        or embedding_msg.context_data.get("_upsert_options", {}).get("partial_update") is False
     ):
         from openviking.utils.tags import merge_search_tags
 
@@ -689,17 +681,13 @@ async def vectorize_file(
         embedding_msg = EmbeddingMsgConverter.from_context(
             context,
             creator_acl_grant,
-            action=(
-                IndexAction.MERGE
-                if action == "merge"
-                else IndexAction.UPSERT
-            ),
+            action=(IndexAction.MERGE if action == "merge" else IndexAction.UPSERT),
         )
         if not embedding_msg:
             return False
 
-        _apply_scalar_overrides(embedding_msg, scalar_override)
         _apply_ingest_options(embedding_msg, ingest_options)
+        _apply_scalar_overrides(embedding_msg, scalar_override)
         enqueued = await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,
